@@ -51,7 +51,11 @@ export function responsesSpec(id) {
         if (!item || typeof item !== 'object') continue;
         for (const part of item.content || []) {
           if (part && part.type === 'output_text' && typeof part.text === 'string') texts.push(part.text);
-          if (part && part.type === 'refusal' && part.refusal) return { error: `the model refused: ${String(part.refusal).slice(0, 200)}` };
+          if (part && part.type === 'refusal') return {
+            error: typeof part.refusal === 'string' && part.refusal
+              ? `the model refused: ${part.refusal.slice(0, 200)}`
+              : 'model refused'
+          };
         }
       }
       if (data.status === 'incomplete') {

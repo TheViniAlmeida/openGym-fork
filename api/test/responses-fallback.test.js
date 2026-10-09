@@ -254,3 +254,33 @@ for (const status of ['completed', undefined]) {
     });
   }
 }
+
+for (const [shape, wire] of responseShapes) {
+  test(`empty or malformed refusal overrides ${shape} at invoke`, async () => {
+    for (const refusal of ['', undefined, null, 42, { message: 'not a refusal string' }]) {
+      const body = { status: 'completed', ...wire,
+        output: [message([output(ANSWER), { type: 'refusal', refusal }])] };
+      const fetch = fakeFetch([protocol, { status: 200, body }]);
+      const result = await invoke(fetch);
+      assert.equal(result.code, 1);
+      assert.equal(result.text, '');
+      assert.equal(result.stderr, 'model refused');
+      assert.equal(fetch.calls.length, 2);
+    }
+  });
+
+  test(`pipeline treats empty or malformed refusal with ${shape} as provider failure`, async () => {
+    for (const refusal of ['', undefined, null, 42, { message: 'not a refusal string' }]) {
+      const body = { status: 'completed', ...wire,
+        output: [message([output(ANSWER), { type: 'refusal', refusal }])] };
+      const fetch = fakeFetch([protocol, { status: 200, body }]);
+      const result = await pipelineAttempt(fetch);
+      assert.equal(result.ok, false);
+      assert.equal(result.errorClass, 'provider');
+      assert.equal(result.nochange, undefined);
+      assert.equal(result.repairable, undefined);
+      assert.equal(result.detail, 'model refused');
+      assert.equal(fetch.calls.length, 2);
+    }
+  });
+}
