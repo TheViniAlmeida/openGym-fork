@@ -137,15 +137,18 @@ export function httpAdapter(spec) {
       const chosen = model || meta.defaultModel;
       if (!chosen) return { code: 1, text: '', stderr: `no model chosen for ${id} (pick one from the list the endpoint serves)` };
 
-      let body = spec.body({ model: chosen, prompt, system: system || null, schema: schema || null, maxTokens });
+      let active = spec;
+      let body = active.body({ model: chosen, prompt, system: system || null, schema: schema || null, maxTokens });
       let retriedWithoutJsonMode = false;
+      let retriedResponses = false;
+      let retriedWithoutReasoning = false;
       let transientRetries = 0;
       for (;;) {
         let res;
         try {
-          res = await call(fetchImpl, endpointUrl(base, spec.path(chosen)), {
+          res = await call(fetchImpl, endpointUrl(base, active.path(chosen)), {
             method: 'POST',
-            headers: { ...extraHeadersFor(id, cfg), 'content-type': 'application/json', ...spec.headers(key) },
+            headers: { ...extraHeadersFor(id, cfg), 'content-type': 'application/json', ...active.headers(key) },
             body: JSON.stringify(body)
           }, timeoutMs, signal);
         } catch (e) {
@@ -154,22 +157,38 @@ export function httpAdapter(spec) {
         }
         const { data, text } = await readJson(res);
         if (!res.ok) {
-          const msg = spec.errorMessage(data) || trim(text, 200);
+          const msg = active.errorMessage(data) || trim(text, 200);
           if (RETRY_STATUSES.has(res.status) && transientRetries < RETRY_DELAYS_MS.length && !(signal && signal.aborted)) {
             await sleep(opts.retryDelayMs != null ? opts.retryDelayMs : RETRY_DELAYS_MS[transientRetries], signal);
             transientRetries++;
             continue;
           }
-          // Some OpenAI-compatible servers reject the JSON-mode flag outright. Once, without it.
-          if (res.status === 400 && spec.withoutJsonMode && !retriedWithoutJsonMode && /response_format|json_schema|json_object|json mode|structured/i.test(msg)) {
-            body = spec.withoutJsonMode(body);
+          // Only this protocol error switches shape, once within the same invoke.
+          if (res.status === 400 && active.responsesFallback && !retriedResponses && /does not support this protocol/i.test(msg)) {
+            active = active.responsesFallback;
+            body = active.body({ model: chosen, prompt, system: system || null, schema: schema || null, maxTokens });
+            retriedResponses = true;
+            // The new shape has its own JSON-format flag and gets its own one-time retry.
+            retriedWithoutJsonMode = false;
+            continue;
+          }
+          // Keep low reasoning by default; remove it only when explicitly unsupported.
+          if (res.status === 400 && active.withoutReasoning && !retriedWithoutReasoning &&
+              /\bunsupported\s+(?:parameter\s*:\s*["']?)?reasoning\b|\breasoning(?:[._]effort)?["']?\s+(?:is\s+)?(?:not supported|unsupported)\b|\bdoes not support\s+(?:the\s+)?(?:parameter\s+)?["']?reasoning\b/i.test(msg)) {
+            body = active.withoutReasoning(body);
+            retriedWithoutReasoning = true;
+            continue;
+          }
+          // Some OpenAI-compatible servers reject the JSON-mode flag outright. Once per shape.
+          if (res.status === 400 && active.withoutJsonMode && !retriedWithoutJsonMode && /response_format|json_schema|json_object|json mode|structured/i.test(msg)) {
+            body = active.withoutJsonMode(body);
             retriedWithoutJsonMode = true;
             continue;
           }
           return { code: 1, text: '', stderr: `${res.status} ${trim(msg, 280)}` };
         }
         let out;
-        try { out = spec.readText(data); } catch (e) { out = { error: `unexpected response shape: ${trim(e.message, 100)}` }; }
+        try { out = active.readText(data); } catch (e) { out = { error: `unexpected response shape: ${trim(e.message, 100)}` }; }
         if (out.error) return { code: 1, text: '', stderr: out.error };
         if (out.truncated) return { code: 1, text: '', stderr: 'the answer was cut off at the output limit; try a smaller plan or a bigger model' };
         return { code: 0, text: String(out.text || '').trim(), stderr: '' };

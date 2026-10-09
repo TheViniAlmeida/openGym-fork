@@ -4,8 +4,12 @@
  * those servers understands. */
 import { httpAdapter } from './http.js';
 import { chatCompletionsSpec } from './openai.js';
+import { responsesSpec } from './responses.js';
 
 // temperature 0: a plan diff wants determinism, and greedy decoding is also what grammar-
 // constrained sampling on a local server handles fastest.
-export const compatibleSpec = chatCompletionsSpec('compatible', { maxTokensField: 'max_tokens', temperature: 0 });
+const spec = chatCompletionsSpec('compatible', { maxTokensField: 'max_tokens', temperature: 0 });
+// Some gateways serve a model only through Responses; retry that protocol once.
+spec.responsesFallback = responsesSpec('compatible');
+export const compatibleSpec = spec;
 export default httpAdapter(compatibleSpec);
